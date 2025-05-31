@@ -22,17 +22,23 @@ void signal_handler(int signum) {
 
 int main(int argc, char* argv[]) {
     // --- Configuration ---
-    if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <path_to_whisper_ggml_model.bin> <your_openai_api_key> [language_code (e.g., en, auto)]" << std::endl;
-        std::cerr << "Example: " << argv[0] << " ./models/ggml-base.en.bin YOUR_API_KEY_HERE en" << std::endl;
+    if (argc < 2) { // MODIFICATION 2: API key is now hardcoded, so only model path is essential from args
+        std::cerr << "Usage: " << argv[0] << " <path_to_whisper_ggml_model.bin> [language_code (e.g., en, auto)]" << std::endl;
+        std::cerr << "Example: " << argv[0] << " ./models/ggml-base.en.bin en" << std::endl;
+        std::cerr << "OpenAI API Key and endpoint are now hardcoded in main.cpp." << std::endl;
         return 1;
     }
 
     std::string model_path = argv[1];
-    std::string openai_api_key = argv[2];
+    // MODIFICATION 2: Hardcode Azure OpenAI credentials
+    std::string openai_api_key = "2z2lTmn0nUX7BiJVFfOqt8E8Nwns9vj9sonjkNKmknhKXaXOk1h2JQQJ99BEACHYHv6XJ3w3AAABACOG4FAN";
+    std::string openai_endpoint = "https://hackfest25-openai-23.openai.azure.com/";
+    std::string deployment_name = "gpt-4o-mini";
+    std::string api_version = "2024-12-01-preview";
+
     std::string language = "auto"; // Default to auto-detect
-    if (argc >= 4) {
-        language = argv[3];
+    if (argc >= 3) { // Adjusted arg index since API key is no longer argv[2]
+        language = argv[2];
     }
     std::chrono::seconds openai_call_interval(10); // How often to call OpenAI
 
@@ -47,7 +53,9 @@ int main(int argc, char* argv[]) {
 
         AudioCapturer audio_capturer(audio_data_queue);
         WhisperTranscriber whisper_transcriber(model_path, language, audio_data_queue, context_builder);
-        OpenAIClient openai_client(context_builder, openai_api_key); // Default model "gpt-3.5-turbo"
+        
+        // MODIFICATION 2: Update OpenAIClient instantiation with new parameters
+        OpenAIClient openai_client(context_builder, openai_api_key, openai_endpoint, deployment_name, api_version);
 
         // --- Start Components ---
         if (!audio_capturer.start_stream()) {
@@ -64,27 +72,20 @@ int main(int argc, char* argv[]) {
         openai_client.start_periodic_classification(openai_call_interval);
 
         std::cout << "System initialized. Capturing audio and transcribing..." << std::endl;
+        std::cout << "Using OpenAI endpoint: " << openai_endpoint << " with deployment: " << deployment_name << std::endl;
         std::cout << "Press Ctrl+C to exit." << std::endl;
 
         // --- Main Loop (Keep application alive) ---
         while (g_application_running) {
-            // Can print status, or just sleep.
-            // Example: print last classification every few seconds if it changes
-            // static std::string last_printed_classification = "";
-            // std::string current_classification = openai_client.get_last_classification_result();
-            // if(current_classification != last_printed_classification) {
-            //    std::cout << "Current Classification: " << current_classification << std::endl;
-            //    last_printed_classification = current_classification;
-            // }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
         // --- Shutdown Components (in reverse order of starting if dependencies exist) ---
         std::cout << "Main loop terminated. Stopping components..." << std::endl;
         
-        openai_client.stop_classification_loop(); // Stop before transcriber if it relies on context
-        whisper_transcriber.stop();        // Stop before audio capturer if it relies on queue
-        audio_capturer.stop_stream();      // Stop audio capture last for its thread
+        openai_client.stop_classification_loop(); 
+        whisper_transcriber.stop();        
+        audio_capturer.stop_stream();      
 
         std::cout << "All components stopped. Exiting." << std::endl;
 
