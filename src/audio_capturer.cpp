@@ -8,19 +8,19 @@ AudioCapturer::AudioCapturer(ConcurrentQueue<std::vector<float>>& audio_data_que
     if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         throw std::runtime_error(std::string("SDL_Init(SDL_INIT_AUDIO) failed: ") + SDL_GetError());
     }
-    std::cout << "SDL Audio initialized." << std::endl;
+    std::cout << "[AudioCapturer] SDL Audio initialized." << std::endl;
 }
 
 AudioCapturer::~AudioCapturer() {
     stop_stream(); // Ensure stream is stopped and device is closed
     SDL_QuitSubSystem(SDL_INIT_AUDIO); // Quit only the audio subsystem
     // If SDL_Init was called for other subsystems, SDL_Quit() would be used.
-    std::cout << "SDL Audio subsystem quit." << std::endl;
+    std::cout << "[AudioCapturer] SDL Audio subsystem quit." << std::endl;
 }
 
 bool AudioCapturer::start_stream() {
     if (running_) {
-        std::cout << "Audio stream is already running." << std::endl;
+        std::cout << "[AudioCapturer] Audio stream is already running." << std::endl;
         return true;
     }
 
@@ -42,7 +42,7 @@ bool AudioCapturer::start_stream() {
                                         // Use SDL_AUDIO_ALLOW_FREQUENCY_CHANGE etc. if you want to allow changes.
 
     if (audio_device_id_ == 0) {
-        std::cerr << "SDL_OpenAudioDevice failed: " << SDL_GetError() << std::endl;
+        std::cerr << "[AudioCapturer] SDL_OpenAudioDevice failed: " << SDL_GetError() << std::endl;
         return false;
     }
 
@@ -95,6 +95,7 @@ void AudioCapturer::sdl_audio_callback(void *user_data, Uint8 *raw_buffer, int l
     }
 
     // Cast the raw buffer to float*
+    std::cout << "[AudioCapturer DEBUG] sdl_audio_callback called, len_bytes: " << len_bytes << ", num_samples: " << num_samples << std::endl;
     float* float_buffer = reinterpret_cast<float*>(raw_buffer);
 
     // Create a vector and copy the data

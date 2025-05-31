@@ -1,17 +1,12 @@
 #include "openai_client.h"
 #include <iostream>
-#include <stdexcept> // For std::runtime_error
-#include <string_view> // For string manipulation if needed
+#include <stdexcept> 
+#include <string_view> 
 
-// CPR for HTTP requests - ensure you have this library available and linked
-// #define CPR_USE_SYSTEM_CURL // Optional: if you want CPR to use system's libcurl
 #include <cpr/cpr.h>
-
-// nlohmann/json for JSON manipulation - ensure you have this library available
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
-// MODIFICATION 2: Updated constructor to accept Azure specific parameters
 OpenAIClient::OpenAIClient(TranscriptContextBuilder& context_builder, 
                            std::string api_key, 
                            const std::string& openai_endpoint,
@@ -22,48 +17,60 @@ OpenAIClient::OpenAIClient(TranscriptContextBuilder& context_builder,
       openai_endpoint_(openai_endpoint),
       deployment_name_(deployment_name),
       api_version_(api_version) {
+    std::cout << "[OpenAIClient] Initializing..." << std::endl;
     if (api_key_.empty()) {
-        std::cerr << "Warning: OpenAI API key is empty. Classification will fail." << std::endl;
+        std::cerr << "[OpenAIClient] Warning: OpenAI API key is empty." << std::endl;
     }
     if (openai_endpoint_.empty()) {
-        std::cerr << "Warning: OpenAI endpoint is empty. Classification will fail." << std::endl;
+        std::cerr << "[OpenAIClient] Warning: OpenAI endpoint is empty." << std::endl;
+    } else {
+        std::cout << "[OpenAIClient] Endpoint: " << openai_endpoint_ << std::endl;
     }
     if (deployment_name_.empty()) {
-        std::cerr << "Warning: OpenAI deployment name is empty. Classification will fail." << std::endl;
+        std::cerr << "[OpenAIClient] Warning: OpenAI deployment name is empty." << std::endl;
+    } else {
+        std::cout << "[OpenAIClient] Deployment: " << deployment_name_ << std::endl;
     }
     if (api_version_.empty()) {
-        std::cerr << "Warning: OpenAI API version is empty. Classification will fail." << std::endl;
+        std::cerr << "[OpenAIClient] Warning: OpenAI API version is empty." << std::endl;
+    } else {
+         std::cout << "[OpenAIClient] API Version: " << api_version_ << std::endl;
     }
+     // The system_prompt_ is already defined in the header
+     // std::cout << "[OpenAIClient DEBUG] System Prompt: " << system_prompt_ << std::endl; // Can be very verbose
+    std::cout << "[OpenAIClient] Initialization complete." << std::endl;
 }
 
 OpenAIClient::~OpenAIClient() {
+    std::cout << "[OpenAIClient] Destructing..." << std::endl;
     stop_classification_loop();
 }
 
 void OpenAIClient::start_periodic_classification(std::chrono::seconds interval) {
     if (running_) {
-        std::cout << "OpenAIClient classification loop is already running." << std::endl;
+        std::cout << "[OpenAIClient] Classification loop is already running." << std::endl;
         return;
     }
     if (api_key_.empty() || openai_endpoint_.empty() || deployment_name_.empty() || api_version_.empty()) {
-        std::cerr << "Cannot start OpenAIClient: API key, endpoint, deployment name, or API version is empty." << std::endl;
+        std::cerr << "[OpenAIClient] ERROR: Cannot start. API key, endpoint, deployment name, or API version is empty." << std::endl;
         return;
     }
     classification_interval_ = interval;
     running_ = true;
     classification_thread_ = std::thread(&OpenAIClient::periodic_classification_loop, this);
-    std::cout << "OpenAIClient periodic classification started with interval: " << interval.count() << "s." << std::endl;
+    std::cout << "[OpenAIClient] Periodic classification started with interval: " << interval.count() << "s." << std::endl;
 }
 
 void OpenAIClient::stop_classification_loop() {
     if (!running_) {
         return;
     }
+    std::cout << "[OpenAIClient] Stopping classification loop..." << std::endl;
     running_ = false;
     if (classification_thread_.joinable()) {
         classification_thread_.join();
     }
-    std::cout << "OpenAIClient classification loop stopped." << std::endl;
+    std::cout << "[OpenAIClient] Classification loop stopped." << std::endl;
 }
 
 std::string OpenAIClient::get_last_classification_result() const {
@@ -72,80 +79,79 @@ std::string OpenAIClient::get_last_classification_result() const {
 }
 
 void OpenAIClient::periodic_classification_loop() {
+    std::cout << "[OpenAIClient] Periodic classification loop started." << std::endl;
     while (running_) {
         std::this_thread::sleep_for(classification_interval_);
-        if (!running_) break;
+        if (!running_) {
+            //std::cout << "[OpenAIClient DEBUG] Loop terminating due to running_ flag." << std::endl;
+            break;
+        }
 
+        std::cout << "[OpenAIClient] Tick for classification." << std::endl;
         std::string current_transcript = context_builder_.get_full_transcript();
+        
         if (current_transcript.empty() || current_transcript.find_first_not_of(" \n\r\t") == std::string::npos) {
+            std::cout << "[OpenAIClient] Transcript is empty or whitespace, skipping classification." << std::endl;
             continue;
         }
-        std::cout << "==> OpenAIClient: Classifying transcript..." << current_transcript<< std::endl;
+
+        std::cout << "[OpenAIClient] Current transcript for classification (length " << current_transcript.length() << "): \"" << current_transcript << "\"" << std::endl;
         
-        // The system_prompt_ already has the placeholder text format.
-        // We just need to append the actual transcript.
-        // The prompt now looks like: "System prompt instructions... Here is the dialogue transcript: <actual transcript>"
-        std::string full_prompt_for_user_role = system_prompt_ + current_transcript;
-
-
-        // For Azure, the system prompt is typically sent as a separate message with "role":"system"
-        // and the user message (transcript) as another message with "role":"user".
-        // The current system_prompt_ is designed to be the content of the system role message.
-        // The user message will be just the transcript.
-
-        std::string classification_result = classify_text_with_openai(current_transcript); // Pass only the transcript
+        std::string classification_result = classify_text_with_openai(current_transcript);
         
         {
             std::lock_guard<std::mutex> lock(result_mutex_);
             last_classification_result_ = classification_result;
         }
-        std::cout << "==> OpenAI Classification: " << classification_result << std::endl;
+        // This is already printed in main.cpp or could be more structured if needed
+        // std::cout << "==> OpenAI Classification: " << classification_result << std::endl; 
     }
+    std::cout << "[OpenAIClient] Periodic classification loop finished." << std::endl;
 }
 
 std::string OpenAIClient::classify_text_with_openai(const std::string& transcript_text) {
-    // The system_prompt_ member variable holds the main instructions.
-    // The transcript_text is the dialogue.
-    
-    // Prepare the JSON payload for the OpenAI API request
-    // The system_prompt_ already includes "Here is the dialogue transcript: "
-    // So the user message will just be the transcript_text.
+    std::cout << "[OpenAIClient] Attempting to classify transcript..." << std::endl;
+    //std::cout << "[OpenAIClient DEBUG] System prompt for API call: " << system_prompt_ << std::endl; // Can be verbose
+    //std::cout << "[OpenAIClient DEBUG] User transcript for API call: " << transcript_text << std::endl;
+
     json payload = {
-        // For Azure, the 'model' is the deployment_name specified in the URL.
-        // Some Azure versions might still expect/allow 'model' in payload, but it's often ignored if deployment is in URL.
-        // We will omit it here as it's part of the URL.
         {"messages", json::array({
-            // MODIFICATION 1: System prompt is used as the content for the "system" role message.
-            {{"role", "system"}, {"content", system_prompt_}}, 
-            // The transcript_text is the user's message.
+            {{"role", "system"}, {"content", system_prompt_}},
             {{"role", "user"}, {"content", transcript_text}} 
         })},
         {"temperature", 0.2},
-        {"max_tokens", 150} // Increased max_tokens slightly to accommodate potentially longer structured responses
+        {"max_tokens", 150} 
     };
 
-    // MODIFICATION 2: Construct Azure OpenAI URL
-    // Format: {endpoint}/openai/deployments/{deployment-name}/chat/completions?api-version={api-version}
     std::string request_url = openai_endpoint_;
-    if (request_url.back() != '/') {
+    if (!request_url.empty() && request_url.back() != '/') { // Add trailing slash if missing and not empty
         request_url += '/';
     }
     request_url += "openai/deployments/" + deployment_name_ + "/chat/completions?api-version=" + api_version_;
+    
+    std::cout << "[OpenAIClient] Request URL: " << request_url << std::endl;
+    //std::cout << "[OpenAIClient DEBUG] Payload: " << payload.dump(2) << std::endl;
+
 
     try {
+        std::cout << "[OpenAIClient] Sending POST request to OpenAI..." << std::endl;
         cpr::Response r = cpr::Post(cpr::Url{request_url},
-                                    // MODIFICATION 2: Use api-key header for Azure
                                     cpr::Header{{"Content-Type", "application/json"},
                                                 {"api-key", api_key_}},
                                     cpr::Body{payload.dump()},
-                                    cpr::Timeout{15000}); // 15 seconds timeout
+                                    cpr::Timeout{15000}); 
+
+        std::cout << "[OpenAIClient] Received response. Status code: " << r.status_code << std::endl;
+        //std::cout << "[OpenAIClient DEBUG] Response body: " << r.text << std::endl;
+
 
         if (r.status_code == 200) {
-            return parse_openai_json_response(r.text);
+            std::string parsed_response = parse_openai_json_response(r.text);
+            std::cout << "[OpenAIClient] API call successful. Parsed response: \"" << parsed_response << "\"" << std::endl;
+            return parsed_response;
         } else {
             std::cerr << "[OpenAIClient] API Error " << r.status_code << ": " << r.text << std::endl;
-            std::cerr << "[OpenAIClient] Request URL: " << request_url << std::endl;
-            std::cerr << "[OpenAIClient] Payload: " << payload.dump(2) << std::endl;
+            // The following lines are already in your original code, good for diagnostics
             if (r.status_code == 401) return "Unknown (Invalid API Key or Auth Error)";
             if (r.status_code == 404) return "Unknown (Endpoint or Deployment Not Found)";
             if (r.status_code == 429) return "Unknown (Rate Limit Exceeded)";
@@ -158,6 +164,7 @@ std::string OpenAIClient::classify_text_with_openai(const std::string& transcrip
 }
 
 std::string OpenAIClient::parse_openai_json_response(const std::string& json_response_str) {
+    //std::cout << "[OpenAIClient DEBUG] Parsing JSON response: " << json_response_str << std::endl;
     try {
         json response_json = json::parse(json_response_str);
         if (response_json.contains("choices") && 
@@ -167,7 +174,9 @@ std::string OpenAIClient::parse_openai_json_response(const std::string& json_res
             const auto& first_choice = response_json["choices"][0];
             if (first_choice.contains("message") && 
                 first_choice["message"].contains("content")) {
-                return first_choice["message"]["content"].get<std::string>();
+                std::string content = first_choice["message"]["content"].get<std::string>();
+                //std::cout << "[OpenAIClient DEBUG] Successfully parsed content: " << content << std::endl;
+                return content;
             }
         }
         std::cerr << "[OpenAIClient] Could not find 'content' in choices[0].message. Response: " << json_response_str << std::endl;

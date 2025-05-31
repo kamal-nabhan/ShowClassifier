@@ -1,8 +1,8 @@
 #include "whisper_transcriber.h"
-#include "audio_capturer.h" // For AudioCapturer::TARGET_SAMPLE_RATE
+#include "audio_capturer.h" 
 #include <iostream>
-#include <stdexcept> // For std::runtime_error
-#include <algorithm> // For std::max
+#include <stdexcept> 
+#include <algorithm> 
 
 WhisperTranscriber::WhisperTranscriber(
     const std::string& model_path,
@@ -12,55 +12,54 @@ WhisperTranscriber::WhisperTranscriber(
     : audio_data_queue_(audio_data_queue),
       context_builder_(context_builder) {
 
-    // Initialize whisper context parameters
+    std::cout << "[WhisperTranscriber] Initializing..." << std::endl;
     struct whisper_context_params cparams = whisper_context_default_params();
-    // cparams.use_gpu = false; // Set to true if you want to try GPU and have it compiled with GPU support
+    // cparams.use_gpu = true; // Enable if you have a GPU build and want to use it
 
-    // Initialize whisper context using the new function
     whisper_ctx_ = whisper_init_from_file_with_params(model_path.c_str(), cparams);
     if (whisper_ctx_ == nullptr) {
-        throw std::runtime_error("Failed to initialize whisper.cpp context from model: " + model_path);
+        throw std::runtime_error("[WhisperTranscriber] Failed to initialize whisper.cpp context from model: " + model_path);
     }
-    std::cout << "Whisper.cpp context initialized with model: " << model_path << std::endl;
+    std::cout << "[WhisperTranscriber] Whisper.cpp context initialized with model: " << model_path << std::endl;
 
-    // Setup whisper parameters for full transcription
-    whisper_params_ = whisper_full_default_params(WHISPER_SAMPLING_GREEDY); // Or WHISPER_SAMPLING_BEAM_SEARCH
+    whisper_params_ = whisper_full_default_params(WHISPER_SAMPLING_GREEDY); 
     
-    whisper_params_.language = language.c_str(); // e.g. "en", "es", "auto"
-    whisper_params_.translate = false;           // Transcribe in the original language
+    whisper_params_.language = language.c_str(); 
+    whisper_params_.translate = false;           
     
-    // Disable whisper.cpp's own console output, as we'll handle it
     whisper_params_.print_special = false;
     whisper_params_.print_progress = false;
     whisper_params_.print_realtime = false;
-    whisper_params_.print_timestamps = false; // Set true if you want timestamps from whisper.cpp
+    whisper_params_.print_timestamps = false; 
 
-    // Number of threads for whisper.cpp to use for processing
     int num_threads = std::max(1, (int)std::thread::hardware_concurrency() / 2);
-    whisper_params_.n_threads = num_threads > 0 ? num_threads : 4; 
+    num_threads = num_threads > 0 ? num_threads : 4; // Ensure at least 1, default to 4 if detection fails weirdly
+    whisper_params_.n_threads = num_threads;
+    std::cout << "[WhisperTranscriber] Using " << num_threads << " threads for transcription." << std::endl;
 
-    // Set the callback for new segments
     whisper_params_.new_segment_callback = WhisperTranscriber::whisper_new_segment_callback;
     whisper_params_.new_segment_callback_user_data = this; 
+    std::cout << "[WhisperTranscriber] Initialization complete." << std::endl;
 }
 
 WhisperTranscriber::~WhisperTranscriber() {
+    std::cout << "[WhisperTranscriber] Destructing..." << std::endl;
     stop(); 
     if (whisper_ctx_ != nullptr) {
         whisper_free(whisper_ctx_);
         whisper_ctx_ = nullptr;
-        std::cout << "Whisper.cpp context freed." << std::endl;
+        std::cout << "[WhisperTranscriber] Whisper.cpp context freed." << std::endl;
     }
 }
 
 bool WhisperTranscriber::start() {
     if (running_) {
-        std::cout << "WhisperTranscriber is already running." << std::endl;
+        std::cout << "[WhisperTranscriber] is already running." << std::endl;
         return true;
     }
     running_ = true;
     transcribe_thread_ = std::thread(&WhisperTranscriber::transcribe_loop, this);
-    std::cout << "WhisperTranscriber started." << std::endl;
+    std::cout << "[WhisperTranscriber] Started transcription thread." << std::endl;
     return true;
 }
 
@@ -68,14 +67,14 @@ void WhisperTranscriber::stop() {
     if (!running_) {
         return;
     }
+    std::cout << "[WhisperTranscriber] Stopping transcription thread..." << std::endl;
     running_ = false;
     if (transcribe_thread_.joinable()) {
         transcribe_thread_.join();
     }
-    std::cout << "WhisperTranscriber stopped." << std::endl;
+    std::cout << "[WhisperTranscriber] Transcription thread stopped." << std::endl;
 }
 
-// Static callback function
 void WhisperTranscriber::whisper_new_segment_callback(
     struct whisper_context *ctx, struct whisper_state *state, int n_new, void *user_data) {
     
@@ -87,57 +86,76 @@ void WhisperTranscriber::whisper_new_segment_callback(
     const int n_segments = whisper_full_n_segments(ctx); 
     std::string new_text_accumulated;
 
-    for (int i = n_segments - n_new; i < n_segments; ++i) {
+    //std::cout << "[WhisperTranscriber DEBUG] New segment callback: n_new = " << n_new << ", total_segments = " << n_segments << std::endl;
+
+    for (int i = std::max(0, n_segments - n_new); i < n_segments; ++i) { // Ensure 'i' starts from at least 0
         const char* segment_text = whisper_full_get_segment_text(ctx, i);
         if (segment_text) {
             new_text_accumulated += segment_text;
+           // std::cout << "[WhisperTranscriber DEBUG] Segment " << i << ": " << segment_text << std::endl;
         }
     }
 
     if (!new_text_accumulated.empty()) {
-        self->context_builder_.append_text(new_text_accumulated + " ");
+        std::cout << "[WhisperTranscriber] New transcript segment: \"" << new_text_accumulated << "\"" << std::endl;
+        self->context_builder_.append_text(new_text_accumulated + " "); // Add space between segments
     }
 }
 
 
 void WhisperTranscriber::transcribe_loop() {
-    const size_t SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING = AudioCapturer::TARGET_SAMPLE_RATE * 5; 
+    const size_t SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING = AudioCapturer::TARGET_SAMPLE_RATE * 5; // 5 seconds of audio
+    // Reduced accumulation for faster feedback during debugging, can be increased later
+    // const size_t SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING = AudioCapturer::TARGET_SAMPLE_RATE * 2; // 2 seconds
+
     internal_audio_buffer_.reserve(SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING + (AudioCapturer::TARGET_SAMPLE_RATE * 2)); 
+    std::cout << "[WhisperTranscriber] Transcribe loop started. Waiting for at least " << SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING << " samples." << std::endl;
 
     while (running_) {
         std::vector<float> new_audio_chunk;
         if (audio_data_queue_.try_pop_for(new_audio_chunk, std::chrono::milliseconds(100))) {
+            //std::cout << "[WhisperTranscriber DEBUG] Popped " << new_audio_chunk.size() << " samples from queue." << std::endl;
             internal_audio_buffer_.insert(internal_audio_buffer_.end(), new_audio_chunk.begin(), new_audio_chunk.end());
+            //std::cout << "[WhisperTranscriber DEBUG] Internal buffer size: " << internal_audio_buffer_.size() << " samples." << std::endl;
         } else {
             if (!running_) break;
+            // No data, sleep briefly or continue to allow running_ flag to be checked
+            std::this_thread::sleep_for(std::chrono::milliseconds(10)); // Sleep a bit if queue is empty but still running
             continue; 
         }
 
-        if (internal_audio_buffer_.size() >= SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING || 
-            (!running_ && !internal_audio_buffer_.empty())) {
+        if (internal_audio_buffer_.size() >= SAMPLES_TO_ACCUMULATE_BEFORE_PROCESSING) {
+            std::cout << "[WhisperTranscriber] Accumulated " << internal_audio_buffer_.size() << " samples. Processing..." << std::endl;
             
-            std::vector<float> chunk_to_process;
-            size_t num_samples_to_process = internal_audio_buffer_.size();
+            // Copy data to process and clear the internal buffer for new audio.
+            // This specific approach to copy and clear might need review for optimal performance
+            // but should be functionally correct for now.
+            std::vector<float> chunk_to_process = internal_audio_buffer_; // Make a copy
+            internal_audio_buffer_.clear(); // Clear for next accumulation
             
-            if (num_samples_to_process > 0) {
-                 chunk_to_process.assign(internal_audio_buffer_.begin(), internal_audio_buffer_.end());
-                 internal_audio_buffer_.clear(); 
-            
-                int ret = whisper_full(whisper_ctx_, whisper_params_, chunk_to_process.data(), chunk_to_process.size());
-                if (ret != 0) {
-                    std::cerr << "Whisper_full failed with code: " << ret << std::endl;
-                }
+            //std::cout << "[WhisperTranscriber DEBUG] Processing chunk of size: " << chunk_to_process.size() << std::endl;
+            int ret = whisper_full(whisper_ctx_, whisper_params_, chunk_to_process.data(), chunk_to_process.size());
+            if (ret != 0) {
+                std::cerr << "[WhisperTranscriber] ERROR: whisper_full failed with code: " << ret << std::endl;
+            } else {
+                //std::cout << "[WhisperTranscriber DEBUG] whisper_full call successful." << std::endl;
+                // New segments are handled by the callback
             }
         }
+         // Check running_ flag again to ensure timely exit if stop() was called during processing
         if (!running_ && internal_audio_buffer_.empty()) {
             break;
         }
     }
+    
+    // Process any remaining audio when stopping
     if (!internal_audio_buffer_.empty()) {
+        std::cout << "[WhisperTranscriber] Processing remaining " << internal_audio_buffer_.size() << " samples before exiting." << std::endl;
         int ret = whisper_full(whisper_ctx_, whisper_params_, internal_audio_buffer_.data(), internal_audio_buffer_.size());
         if (ret != 0) {
-            std::cerr << "Whisper_full (final flush) failed with code: " << ret << std::endl;
+            std::cerr << "[WhisperTranscriber] ERROR: whisper_full (final flush) failed with code: " << ret << std::endl;
         }
         internal_audio_buffer_.clear();
     }
+    std::cout << "[WhisperTranscriber] Transcribe loop finished." << std::endl;
 }
